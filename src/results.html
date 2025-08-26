@@ -90,34 +90,55 @@
       statusEl.textContent = `Loaded ${data?.length ?? 0} battles`;
       return data || [];
     }
-
     function battleDetailsHtml(payload) {
       const b = payload || {};
       const p = b.participants || [];
       const e = b.events || [];
       const totals = b.totals || [];
+
+      // Determine denominator for average:
+      // 1) prefer stored b.denominator
+      // 2) else sum event weights (assume all events were active)
+      const denom =
+        (typeof b.denominator === 'number' && b.denominator > 0)
+          ? b.denominator
+          : (e.reduce((s, ev) => s + (ev && typeof ev.weight === 'number' ? ev.weight : 1), 0) || 1);
+
+      // Prefer stored averages, else derive from totals/denom
+      const avgTotals = Array.isArray(b.avgTotals)
+        ? b.avgTotals
+        : (Array.isArray(totals) ? totals.map(t => t / denom) : []);
+
       let html = '<table><thead><tr><th>Participant</th>';
-      e.forEach(ev => {const base = ev.name.replace(/\(.*?\)/, '').trim();html += `<th>${escapeHtml(base)} (UPI)${ev.weight && ev.weight!==1 ? ' ×'+ev.weight : ''}${ev.perBW? ' per BW':''}</th>`;});
+      e.forEach(ev => {
+        const base = (ev?.name || '').replace(/\(.*?\)/, '').trim();
+        html += `<th>${escapeHtml(base)} (UPI)${ev && ev.weight && ev.weight !== 1 ? ' ×' + ev.weight : ''}${ev && ev.perBW ? ' per BW' : ''}</th>`;
+      });
       html += '<th>Avg UPI</th></tr></thead><tbody>';
-      p.forEach((pi,i) => {
-        const scores = b.scores?.[i] || [];
+
+      p.forEach((pi, i) => {
+        const scores = (b.scores && b.scores[i]) || [];
         html += `<tr><td>${escapeHtml(pi.name)}</td>`;
-        e.forEach((_,j) => html += `<td>${typeof scores[j]==='number'? scores[j].toFixed(2) : '-'}</td>`);
-        html += `<td><strong>${typeof totals[i]==='number'? totals[i].toFixed(2) : '-'}</strong></td></tr>`;
+        e.forEach((_, j) => {
+          const s = scores[j];
+          html += `<td>${typeof s === 'number' ? s.toFixed(2) : '-'}</td>`;
+        });
+        const avg = typeof avgTotals[i] === 'number' ? avgTotals[i].toFixed(2) : '-';
+        html += `<td><strong>${avg}</strong></td></tr>`;
       });
       html += '</tbody></table>';
 
       // Optional raw matrix
       if (b.matrix) {
         html += '<details style="margin-top:8px"><summary>Show raw input</summary>';
-        html += '<div style="overflow:auto"><table style="margin-top:6px"><thead><tr><th>Event \\ Participant</th>';
+        html += '<div style="overflow:auto"><table style="margin-top:6px"><thead><tr><th>Event \\\\ Participant</th>';
         p.forEach(pi => { html += `<th>${escapeHtml(pi.name)}</th>`; });
         html += '</tr></thead><tbody>';
         e.forEach((ev, j) => {
           html += `<tr><th>${escapeHtml(ev.name)}</th>`;
-          p.forEach((_, i)=> {
+          p.forEach((_, i) => {
             const v = b.matrix?.[j]?.[i];
-            html += `<td style="text-align:right">${v==null?'-':String(v)}</td>`;
+            html += `<td style="text-align:right">${v == null ? '-' : String(v)}</td>`;
           });
           html += '</tr>';
         });
