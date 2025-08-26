@@ -184,21 +184,23 @@
     html += '</tbody></table></div>';
     matrixContainer.innerHTML = html;
   }
-
   function calculate(){
-    if(events.length === 0 || participants.length === 0){ scoresContainer.innerHTML = '<p class="note">Nothing to calculate.</p>'; return; }
+    if(events.length === 0 || participants.length === 0){ 
+      scoresContainer.innerHTML = '<p class="note">Nothing to calculate.</p>'; 
+      return; 
+    }
 
-    // Build normalized scores per event
+    // Normalized per-event scores and a flag for events that are actually scorable
     const norm = participants.map(()=> events.map(()=> 0)); // [i][j]
+    const eventActive = Array(events.length).fill(false);
 
     events.forEach((e, j) => {
-      // Build adjusted values P_ij' with perBW if needed
       const vals = participants.map((p, i) => {
         let v = parseNumber(matrix[j]?.[i]);
         if(v == null) return null;
         if(e.perBW){
           const bw = parseNumber(p.bw);
-          if(!bw || bw <= 0) return NaN; // missing bw
+          if(!bw || bw <= 0) return NaN;
           v = v / bw;
         }
         return v;
@@ -206,33 +208,36 @@
 
       const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
       if(finiteVals.length === 0) return; // cannot score this event
+      eventActive[j] = true;
 
       if(e.mode === 'max'){
         const maxV = Math.max(...finiteVals);
         participants.forEach((_, i) => {
           const v = vals[i];
-          let s = 0;
-          if(typeof v === 'number' && isFinite(v)) s = (v / maxV) * 100;
-          norm[i][j] = s * e.weight;
+          norm[i][j] = (typeof v === 'number' && isFinite(v)) ? (v / maxV) * 100 * (e.weight ?? 1) : 0;
         });
       } else {
         const positiveVals = finiteVals.filter(x => x > 0);
         const minV = Math.min(...positiveVals);
         participants.forEach((_, i) => {
           const v = vals[i];
-          let s = 0;
-          if(typeof v === 'number' && isFinite(v) && v > 0) s = (minV / v) * 100;
-          norm[i][j] = s * e.weight;
+          norm[i][j] = (typeof v === 'number' && isFinite(v) && v > 0) ? (minV / v) * 100 * (e.weight ?? 1) : 0;
         });
       }
     });
 
+    // Sum and then average by the total active event-weight
     const totals = participants.map((_, i) => norm[i].reduce((a,b)=>a+b,0));
+    const denom = events.reduce((s,e,j)=> s + (eventActive[j] ? (e.weight ?? 1) : 0), 0) || 1;
+    const avgTotals = totals.map(t => t / denom);
 
-    // Render scores table
+    // Render scores table: event headers as "(UPI)", final column "Avg UPI"
     let html = '<div style="overflow:auto"><table><thead><tr><th>Participant</th>';
-    events.forEach((e, j)=>{ html += `<th>${escapeHtml(e.name.replace(/\(.*?\)/, '').trim())} (UPI)${e.weight!==1? ` ×${e.weight}`:''}</th>`; });
-    html += '<th>Total UPI</th></tr></thead><tbody>';
+    events.forEach((e)=>{ 
+      const base = e.name.replace(/\(.*?\)/, '').trim();
+      html += `<th>${escapeHtml(base)} (UPI)${e.weight!==1? ` ×${e.weight}`:''}</th>`; 
+    });
+    html += '<th>Avg UPI</th></tr></thead><tbody>';
     participants.forEach((p, i) => {
       html += `<tr><th>${escapeHtml(p.name)}</th>`;
       events.forEach((_, j)=>{
@@ -240,13 +245,13 @@
         const cls = isNaN(s) ? 'error' : (s>0? 'ok':'warn');
         html += `<td class="${cls}">${isNaN(s)? 'BW missing' : s.toFixed(2)}</td>`;
       });
-      html += `<td><strong>${totals[i].toFixed(2)}</strong></td></tr>`;
+      html += `<td><strong>${avgTotals[i].toFixed(2)}</strong></td></tr>`;
     });
     html += '</tbody></table></div>';
 
-    // Ranking
-    const order = participants.map((_, i)=> i).sort((a,b)=> totals[b]-totals[a]);
-    html += '<p class="note">Ranking: ' + order.map((idx, k)=> `${k+1}. ${escapeHtml(participants[idx].name)} (${totals[idx].toFixed(2)})`).join('  ') + '</p>';
+    // Ranking by Avg UPI
+    const order = participants.map((_, i)=> i).sort((a,b)=> avgTotals[b]-avgTotals[a]);
+    html += '<p class="note">Ranking: ' + order.map((idx, k)=> `${k+1}. ${escapeHtml(participants[idx].name)} (${avgTotals[idx].toFixed(2)})`).join('  ') + '</p>';
 
     scoresContainer.innerHTML = html;
   }
@@ -397,67 +402,75 @@
     if(error){ alert("Save failed: " + error.message); return null; }
     return data;
   }
-
   el('saveBattle').addEventListener('click', async () => {
-    if(!participants.length || !events.length){
+    if (!participants.length || !events.length) {
       alert("Add participants and events first.");
       return;
     }
     const title = prompt('Battle title', 'UPI Battle');
-    if(!title) return;
+    if (!title) return;
 
-    // Compute scores and totals based on current state
-    const scores = Array.from({length: participants.length}, () => Array(events.length).fill(0));
-    const totals = participants.map(()=>0);
+    // Compute per-event UPI scores
+    const scores = Array.from({ length: participants.length }, () => Array(events.length).fill(0));
+    const totals = participants.map(() => 0);
+
+    // Track which events are actually scorable (at least one finite value)
+    const eventActive = Array(events.length).fill(false);
 
     events.forEach((e, j) => {
       const vals = participants.map((p, i) => {
         let v = parseNumber(matrix[j]?.[i]);
-        if(v == null) return null;
-        if(e.perBW){
+        if (v == null) return null;
+        if (e.perBW) {
           const bw = parseNumber(p.bw);
-          if(!bw || bw <= 0) return NaN;
+          if (!bw || bw <= 0) return NaN;
           v = v / bw;
         }
         return v;
       });
-      const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
-      if(finiteVals.length === 0) return;
 
-      if(e.mode === 'max'){
+      const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
+      if (finiteVals.length === 0) return; // cannot score this event
+      eventActive[j] = true;
+
+      if (e.mode === 'max') {
         const maxV = Math.max(...finiteVals);
         participants.forEach((_, i) => {
           const v = vals[i];
-          scores[i][j] = (typeof v==='number' && isFinite(v)) ? (v/maxV)*100*(e.weight??1) : 0;
+          scores[i][j] = (typeof v === 'number' && isFinite(v)) ? (v / maxV) * 100 * (e.weight ?? 1) : 0;
         });
       } else {
         const positiveVals = finiteVals.filter(x => x > 0);
         const minV = Math.min(...positiveVals);
         participants.forEach((_, i) => {
           const v = vals[i];
-          scores[i][j] = (typeof v==='number' && isFinite(v) && v>0) ? (minV/v)*100*(e.weight??1) : 0;
+          scores[i][j] = (typeof v === 'number' && isFinite(v) && v > 0) ? (minV / v) * 100 * (e.weight ?? 1) : 0;
         });
       }
     });
 
-    for(let i=0;i<participants.length;i++){
-      totals[i] = scores[i].reduce((a,b)=>a+b,0);
+    // Sum and compute averages
+    for (let i = 0; i < participants.length; i++) {
+      totals[i] = scores[i].reduce((a, b) => a + b, 0);
     }
+    const denominator = events.reduce((s, e, j) => s + (eventActive[j] ? (e.weight ?? 1) : 0), 0) || 1;
+    const avgTotals = totals.map(t => t / denominator);
 
     const battle = {
       title,
       date: new Date().toISOString(),
       participants: participants.map(p => ({ name: p.name, bw: p.bw ?? null })),
       events: events.map(e => ({ name: e.name, mode: e.mode, weight: e.weight ?? 1, perBW: !!e.perBW })),
-      scores,
-      totals,
-      matrix
+      scores,        // per-event UPI
+      totals,        // sum of UPI (kept for compatibility)
+      avgTotals,     // NEW: average UPI (what you want to show)
+      denominator,   // NEW: sum of active event weights used in the average
+      matrix         // raw inputs
     };
 
     const saved = await saveBattleToSupabase(battle);
-    if(saved) alert('Saved to Supabase.');
+    if (saved) alert('Saved to Supabase.');
   });
-
 })();
 </script>
 </body>
