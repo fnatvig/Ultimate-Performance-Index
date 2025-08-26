@@ -1,0 +1,2 @@
+# Ultimate Performance Index (UPI)
+Physical performance varies across strength, endurance, and explosiveness, making comparisons difficult. To address this, the Ultimate Performance Index (UPI) normalizes results from different events, like bench press and skierg, into a single score that fairly reflects overall ability.
