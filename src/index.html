@@ -99,10 +99,21 @@
       <button id="calculate">Calculate</button>
       <button id="sortByUPI">Sort by UPI</button>
       <button id="printPage">Print</button>
+      <!-- Added: save + link to scoreboard -->
+      <button id="saveBattle">Save battle</button>
+      <a href="./results.html" style="align-self:center">Open scoreboard</a>
     </div>
     <div id="scoresContainer"></div>
     <div class="footer print-only">Generated with the UPI Live Calculator</div>
   </fieldset>
+
+  <!-- Supabase client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = "https://hfbcayytxdmaywpbyslj.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhmYmNheXl0eGRtYXl3cGJ5c2xqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI0OTYzODMsImV4cCI6MjA2ODA3MjM4M30._FCV0HZaMoF30NsERQU4tJjGs7cJrRgnUyDLSo8By5o";
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+  </script>
 
 <script>
 (function(){
@@ -241,13 +252,8 @@
   }
 
   function sortByUPI(){
-    // Trigger a calc, then re-order participants by current totals
     if(events.length === 0 || participants.length === 0) return;
-    const tempMatrix = JSON.parse(JSON.stringify(matrix));
-    const tempParticipants = JSON.parse(JSON.stringify(participants));
-    const tempEvents = JSON.parse(JSON.stringify(events));
 
-    // quick compute totals
     const totals = participants.map(()=>0);
     const norm = participants.map(()=> events.map(()=> 0));
     events.forEach((e, j) => {
@@ -276,7 +282,6 @@
 
     const order = participants.map((_, i)=> i).sort((a,b)=> totals[b]-totals[a]);
 
-    // reorder participants and matrix
     const pNew = order.map(i => participants[i]);
     const mNew = {};
     events.forEach((_, j)=>{ mNew[j] = {}; order.forEach((oldI, newI)=> { mNew[j][newI] = matrix[j][oldI]; }); });
@@ -326,7 +331,6 @@
     if(e.target.classList.contains('del-p')){
       const i = Number(e.target.dataset.i);
       participants.splice(i,1);
-      // remove column i from matrix
       Object.keys(matrix).forEach(j => { const row = {}; let k=0; Object.keys(matrix[j]).forEach(ci=>{ if(Number(ci)!==i){ row[k++] = matrix[j][ci]; } }); matrix[j] = row; });
       renderParticipants(); renderMatrix();
     }
@@ -359,7 +363,6 @@
     if(e.target.classList.contains('del-e')){
       const j = Number(e.target.dataset.j);
       events.splice(j,1);
-      // rebuild matrix dropping event j
       const m2 = {}; let nj = 0; Object.keys(matrix).forEach(k => { if(Number(k)!==j){ m2[nj++] = matrix[k]; } });
       matrix = m2;
       renderEvents(); renderMatrix();
@@ -379,10 +382,82 @@
   el('sortByUPI').addEventListener('click', sortByUPI);
   el('printPage').addEventListener('click', () => window.print());
 
-  // Seed one example event for convenience
+  // Seed example events
   events.push({ name: 'Bench Press (kg)', mode: 'max', weight: 1, perBW: false });
   events.push({ name: 'Skierg 500m (s)', mode: 'min', weight: 1, perBW: false });
   renderEvents();
+
+  // Save to Supabase
+  async function saveBattleToSupabase(battle){
+    const { data, error } = await sb.from('battles').insert({
+      title: battle.title,
+      date: battle.date,
+      payload: battle
+    }).select().single();
+    if(error){ alert("Save failed: " + error.message); return null; }
+    return data;
+  }
+
+  el('saveBattle').addEventListener('click', async () => {
+    if(!participants.length || !events.length){
+      alert("Add participants and events first.");
+      return;
+    }
+    const title = prompt('Battle title', 'UPI Battle');
+    if(!title) return;
+
+    // Compute scores and totals based on current state
+    const scores = Array.from({length: participants.length}, () => Array(events.length).fill(0));
+    const totals = participants.map(()=>0);
+
+    events.forEach((e, j) => {
+      const vals = participants.map((p, i) => {
+        let v = parseNumber(matrix[j]?.[i]);
+        if(v == null) return null;
+        if(e.perBW){
+          const bw = parseNumber(p.bw);
+          if(!bw || bw <= 0) return NaN;
+          v = v / bw;
+        }
+        return v;
+      });
+      const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
+      if(finiteVals.length === 0) return;
+
+      if(e.mode === 'max'){
+        const maxV = Math.max(...finiteVals);
+        participants.forEach((_, i) => {
+          const v = vals[i];
+          scores[i][j] = (typeof v==='number' && isFinite(v)) ? (v/maxV)*100*(e.weight??1) : 0;
+        });
+      } else {
+        const positiveVals = finiteVals.filter(x => x > 0);
+        const minV = Math.min(...positiveVals);
+        participants.forEach((_, i) => {
+          const v = vals[i];
+          scores[i][j] = (typeof v==='number' && isFinite(v) && v>0) ? (minV/v)*100*(e.weight??1) : 0;
+        });
+      }
+    });
+
+    for(let i=0;i<participants.length;i++){
+      totals[i] = scores[i].reduce((a,b)=>a+b,0);
+    }
+
+    const battle = {
+      title,
+      date: new Date().toISOString(),
+      participants: participants.map(p => ({ name: p.name, bw: p.bw ?? null })),
+      events: events.map(e => ({ name: e.name, mode: e.mode, weight: e.weight ?? 1, perBW: !!e.perBW })),
+      scores,
+      totals,
+      matrix
+    };
+
+    const saved = await saveBattleToSupabase(battle);
+    if(saved) alert('Saved to Supabase.');
+  });
+
 })();
 </script>
 </body>

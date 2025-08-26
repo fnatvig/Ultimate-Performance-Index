@@ -5,151 +5,199 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>UPI Scoreboard</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 24px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
     h1 { margin: 0 0 12px; font-size: 22px; }
     .note { color: #666; font-size: 13px; }
     .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
-    button { padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-    input[type="file"] { border: none; }
+    button, .btn {
+      padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; background: #fff; cursor: pointer; text-decoration: none; color: inherit;
+    }
+    .btn-link { border: 0; }
+    .danger { background: #ffecec; }
+    .ok { background: #e8f7ee; }
+    .warn { background: #fff5e6; }
+    .list { display: grid; gap: 12px; }
+    .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; }
+    .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    .pill { display: inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; margin-left: 6px; }
     table { border-collapse: collapse; width: 100%; font-size: 14px; }
     th, td { border: 1px solid #e5e5e5; padding: 6px 8px; text-align: left; }
     th { background: #fafafa; }
     details summary { cursor: pointer; }
-    .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
-    .pill { display: inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; margin-left: 6px; }
-    .danger { background: #ffecec; }
+    input[type="search"] { border: 1px solid #ccc; border-radius: 8px; padding: 6px 8px; }
     .footer { margin-top: 16px; font-size: 12px; color: #666; }
   </style>
 </head>
 <body>
   <h1>UPI Scoreboard</h1>
-  <p class="note">Stores results locally in your browser. Use export/import to share between devices.</p>
+  <p class="note">Listing battles saved to Supabase. Click a battle to view participant scores and UPI totals.</p>
 
   <div class="controls">
-    <button id="newBattle">New battle</button>
+    <button id="refresh">Refresh</button>
     <button id="exportAll">Export all</button>
-    <input id="importFile" type="file" accept="application/json" />
-    <button id="clearAll" class="danger">Clear all</button>
-    <a href="./upi.html" style="margin-left:auto">↩︎ Back to calculator</a>
+    <input id="q" type="search" placeholder="Filter by title…" />
+    <a href="./index.html" class="btn btn-link" style="margin-left:auto">↩︎ Back to calculator</a>
   </div>
 
-  <div id="list"></div>
+  <div id="status" class="note"></div>
+  <div id="list" class="list"></div>
 
-  <template id="battleRowTpl">
+  <template id="battleTpl">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">
+      <div class="row">
         <div>
           <strong class="title"></strong>
           <span class="pill date"></span>
           <span class="pill count"></span>
         </div>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex; gap:6px">
           <button class="view">View</button>
           <button class="export">Export</button>
-          <button class="delete danger">Delete</button>
         </div>
       </div>
       <div class="body" style="margin-top:8px; display:none"></div>
     </div>
   </template>
 
-<script>
-(function(){
-  const KEY = 'UPI_BATTLES_V1';
-  const list = document.getElementById('list');
+  <!-- Supabase client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // ⬇️ Fill these in
+    const SUPABASE_URL  = "https://hfbcayytxdmaywpbyslj.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhmYmNheXl0eGRtYXl3cGJ5c2xqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI0OTYzODMsImV4cCI6MjA2ODA3MjM4M30._FCV0HZaMoF30NsERQU4tJjGs7cJrRgnUyDLSo8By5o";
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
-  function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
-  function save(data){ localStorage.setItem(KEY, JSON.stringify(data)); }
-  function fmtDate(s){ try { return new Date(s).toLocaleString(); } catch { return s; } }
+    const listEl = document.getElementById('list');
+    const statusEl = document.getElementById('status');
+    const tpl = document.getElementById('battleTpl');
+    const q = document.getElementById('q');
 
-  function render(){
-    const battles = load();
-    list.innerHTML = '';
-    if(battles.length === 0){
-      list.innerHTML = '<p class="note">No battles saved yet. Save from the calculator or create a new one manually.</p>';
-      return;
-    }
-    battles.forEach((b, idx) => list.appendChild(renderRow(b, idx)));
-  }
+    let battlesCache = [];
 
-  function renderRow(battle, idx){
-    const tpl = document.getElementById('battleRowTpl').content.cloneNode(true);
-    tpl.querySelector('.title').textContent = battle.title || `Battle ${idx+1}`;
-    tpl.querySelector('.date').textContent = battle.date ? fmtDate(battle.date) : 'no date';
-    tpl.querySelector('.count').textContent = `${battle.participants?.length || 0} participants`;
+    function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function fmtWhen(s){ try { return new Date(s).toLocaleString(); } catch { return s || ''; } }
 
-    const body = tpl.querySelector('.body');
-    tpl.querySelector('.view').addEventListener('click', () => {
-      body.style.display = body.style.display === 'none' ? 'block' : 'none';
-      if(body.dataset.filled) return;
-      body.innerHTML = battleDetailsHtml(battle);
-      body.dataset.filled = '1';
-    });
-
-    tpl.querySelector('.delete').addEventListener('click', () => {
-      if(confirm('Delete this battle?')){
-        const arr = load(); arr.splice(idx,1); save(arr); render();
+    async function fetchBattles() {
+      statusEl.textContent = "Loading…";
+      const { data, error } = await sb
+        .from('battles')
+        .select('id, created_at, title, date, payload')
+        .order('created_at', { ascending: false });
+      if (error) {
+        statusEl.textContent = "Load failed: " + error.message;
+        return [];
       }
-    });
+      statusEl.textContent = `Loaded ${data?.length ?? 0} battles`;
+      return data || [];
+    }
 
-    tpl.querySelector('.export').addEventListener('click', () => {
-      const blob = new Blob([JSON.stringify(battle, null, 2)], {type:'application/json'});
+    function battleDetailsHtml(payload) {
+      const b = payload || {};
+      const p = b.participants || [];
+      const e = b.events || [];
+      const totals = b.totals || [];
+      let html = '<table><thead><tr><th>Participant</th>';
+      e.forEach(ev => { html += `<th>${escapeHtml(ev.name)}${ev.weight && ev.weight!==1 ? ' ×'+ev.weight : ''}${ev.perBW? ' per BW':''}</th>`; });
+      html += '<th>UPI</th></tr></thead><tbody>';
+      p.forEach((pi,i) => {
+        const scores = b.scores?.[i] || [];
+        html += `<tr><td>${escapeHtml(pi.name)}</td>`;
+        e.forEach((_,j) => html += `<td>${typeof scores[j]==='number'? scores[j].toFixed(2) : '-'}</td>`);
+        html += `<td><strong>${typeof totals[i]==='number'? totals[i].toFixed(2) : '-'}</strong></td></tr>`;
+      });
+      html += '</tbody></table>';
+
+      // Optional raw matrix
+      if (b.matrix) {
+        html += '<details style="margin-top:8px"><summary>Show raw input</summary>';
+        html += '<div style="overflow:auto"><table style="margin-top:6px"><thead><tr><th>Event \\ Participant</th>';
+        p.forEach(pi => { html += `<th>${escapeHtml(pi.name)}</th>`; });
+        html += '</tr></thead><tbody>';
+        e.forEach((ev, j) => {
+          html += `<tr><th>${escapeHtml(ev.name)}</th>`;
+          p.forEach((_, i)=> {
+            const v = b.matrix?.[j]?.[i];
+            html += `<td style="text-align:right">${v==null?'-':String(v)}</td>`;
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></details>';
+      }
+
+      return html;
+    }
+
+    function renderList(rows) {
+      const term = (q.value || '').toLowerCase();
+      const filtered = term
+        ? rows.filter(r => (r.title || '').toLowerCase().includes(term))
+        : rows;
+
+      listEl.innerHTML = '';
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<p class="note">No battles found.</p>';
+        return;
+      }
+
+      filtered.forEach(row => {
+        const node = tpl.content.cloneNode(true);
+        node.querySelector('.title').textContent = row.title || 'Untitled battle';
+        node.querySelector('.date').textContent = fmtWhen(row.date || row.created_at);
+        node.querySelector('.count').textContent = `${row.payload?.participants?.length ?? 0} participants`;
+
+        const body = node.querySelector('.body');
+        node.querySelector('.view').addEventListener('click', () => {
+          const visible = body.style.display !== 'none';
+          body.style.display = visible ? 'none' : 'block';
+          if (!visible && !body.dataset.filled) {
+            body.innerHTML = battleDetailsHtml(row.payload);
+            body.dataset.filled = '1';
+          }
+        });
+
+        node.querySelector('.export').addEventListener('click', () => {
+          const blob = new Blob([JSON.stringify(row, null, 2)], {type:'application/json'});
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = (row.title?.replace(/\s+/g,'_') || 'battle') + '.json';
+          a.click();
+          setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+        });
+
+        listEl.appendChild(node);
+      });
+    }
+
+    async function refresh() {
+      battlesCache = await fetchBattles();
+      renderList(battlesCache);
+    }
+
+    // Controls
+    document.getElementById('refresh').addEventListener('click', refresh);
+    document.getElementById('exportAll').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(battlesCache, null, 2)], {type:'application/json'});
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-      a.download = (battle.title||`battle-${idx+1}`).replace(/\\s+/g,'_')+'.json';
-      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+      a.download = 'upi_battles.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
     });
+    document.getElementById('q').addEventListener('input', () => renderList(battlesCache));
 
-    return tpl;
-  }
+    // Realtime updates on inserts
+    const channel = sb.channel('realtime:battles')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'battles' }, (payload) => {
+        // Prepend the new row and re-render
+        battlesCache.unshift(payload.new);
+        renderList(battlesCache);
+        statusEl.textContent = `New battle saved at ${fmtWhen(payload.new.created_at)}`;
+      })
+      .subscribe();
 
-  function battleDetailsHtml(b){
-    const p = b.participants || [];
-    const e = b.events || [];
-    const totals = b.totals || [];
-    let html = '<table><thead><tr><th>Participant</th>';
-    e.forEach(ev => { html += `<th>${ev.name}</th>`; });
-    html += '<th>UPI</th></tr></thead><tbody>';
-    p.forEach((pi,i) => {
-      html += `<tr><td>${pi.name}</td>`;
-      const scores = b.scores?.[i] || [];
-      e.forEach((_,j) => html += `<td>${typeof scores[j]==='number'? scores[j].toFixed(2):'-'}</td>`);
-      html += `<td><strong>${typeof totals[i]==='number'? totals[i].toFixed(2):'-'}</strong></td></tr>`;
-    });
-    html += '</tbody></table>';
-    return html;
-  }
+    // Initial load
+    refresh();
+  </script>
 
-  // Controls
-  document.getElementById('newBattle').addEventListener('click', () => {
-    const title = prompt('Battle title'); const date = new Date().toISOString();
-    const empty = { title, date, participants:[], events:[], scores:[], totals:[], matrix:{} };
-    const arr = load(); arr.unshift(empty); save(arr); render();
-  });
-
-  document.getElementById('exportAll').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(load(), null, 2)], {type:'application/json'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'upi_battles.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
-  });
-
-  document.getElementById('importFile').addEventListener('change', e => {
-    const file = e.target.files?.[0]; if(!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try{ const data = JSON.parse(ev.target.result); if(!Array.isArray(data)) throw new Error(); save(data); render(); }
-      catch{ alert('Import failed'); }
-    };
-    reader.readAsText(file);
-  });
-
-  document.getElementById('clearAll').addEventListener('click', () => {
-    if(confirm('Clear all battles?')){ save([]); render(); }
-  });
-
-  render();
-})();
-</script>
-
-  <div class="footer">Data stored locally in your browser (localStorage, key UPI_BATTLES_V1).</div>
+  <div class="footer">
+    Data source: Supabase table <code>battles</code>. Times shown in your device local time.
+  </div>
 </body>
 </html>
