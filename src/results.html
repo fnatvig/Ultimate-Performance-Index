@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UPI Scoreboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    .note { color: #666; font-size: 13px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+    button { padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    input[type="file"] { border: none; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { border: 1px solid #e5e5e5; padding: 6px 8px; text-align: left; }
+    th { background: #fafafa; }
+    details summary { cursor: pointer; }
+    .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; margin-left: 6px; }
+    .danger { background: #ffecec; }
+    .footer { margin-top: 16px; font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>UPI Scoreboard</h1>
+  <p class="note">Stores results locally in your browser. Use export/import to share between devices.</p>
+
+  <div class="controls">
+    <button id="newBattle">New battle</button>
+    <button id="exportAll">Export all</button>
+    <input id="importFile" type="file" accept="application/json" />
+    <button id="clearAll" class="danger">Clear all</button>
+    <a href="./upi.html" style="margin-left:auto">↩︎ Back to calculator</a>
+  </div>
+
+  <div id="list"></div>
+
+  <template id="battleRowTpl">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">
+        <div>
+          <strong class="title"></strong>
+          <span class="pill date"></span>
+          <span class="pill count"></span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="view">View</button>
+          <button class="export">Export</button>
+          <button class="delete danger">Delete</button>
+        </div>
+      </div>
+      <div class="body" style="margin-top:8px; display:none"></div>
+    </div>
+  </template>
+
+<script>
+(function(){
+  const KEY = 'UPI_BATTLES_V1';
+  const list = document.getElementById('list');
+
+  function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
+  function save(data){ localStorage.setItem(KEY, JSON.stringify(data)); }
+  function fmtDate(s){ try { return new Date(s).toLocaleString(); } catch { return s; } }
+
+  function render(){
+    const battles = load();
+    list.innerHTML = '';
+    if(battles.length === 0){
+      list.innerHTML = '<p class="note">No battles saved yet. Save from the calculator or create a new one manually.</p>';
+      return;
+    }
+    battles.forEach((b, idx) => list.appendChild(renderRow(b, idx)));
+  }
+
+  function renderRow(battle, idx){
+    const tpl = document.getElementById('battleRowTpl').content.cloneNode(true);
+    tpl.querySelector('.title').textContent = battle.title || `Battle ${idx+1}`;
+    tpl.querySelector('.date').textContent = battle.date ? fmtDate(battle.date) : 'no date';
+    tpl.querySelector('.count').textContent = `${battle.participants?.length || 0} participants`;
+
+    const body = tpl.querySelector('.body');
+    tpl.querySelector('.view').addEventListener('click', () => {
+      body.style.display = body.style.display === 'none' ? 'block' : 'none';
+      if(body.dataset.filled) return;
+      body.innerHTML = battleDetailsHtml(battle);
+      body.dataset.filled = '1';
+    });
+
+    tpl.querySelector('.delete').addEventListener('click', () => {
+      if(confirm('Delete this battle?')){
+        const arr = load(); arr.splice(idx,1); save(arr); render();
+      }
+    });
+
+    tpl.querySelector('.export').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(battle, null, 2)], {type:'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = (battle.title||`battle-${idx+1}`).replace(/\\s+/g,'_')+'.json';
+      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+    });
+
+    return tpl;
+  }
+
+  function battleDetailsHtml(b){
+    const p = b.participants || [];
+    const e = b.events || [];
+    const totals = b.totals || [];
+    let html = '<table><thead><tr><th>Participant</th>';
+    e.forEach(ev => { html += `<th>${ev.name}</th>`; });
+    html += '<th>UPI</th></tr></thead><tbody>';
+    p.forEach((pi,i) => {
+      html += `<tr><td>${pi.name}</td>`;
+      const scores = b.scores?.[i] || [];
+      e.forEach((_,j) => html += `<td>${typeof scores[j]==='number'? scores[j].toFixed(2):'-'}</td>`);
+      html += `<td><strong>${typeof totals[i]==='number'? totals[i].toFixed(2):'-'}</strong></td></tr>`;
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  // Controls
+  document.getElementById('newBattle').addEventListener('click', () => {
+    const title = prompt('Battle title'); const date = new Date().toISOString();
+    const empty = { title, date, participants:[], events:[], scores:[], totals:[], matrix:{} };
+    const arr = load(); arr.unshift(empty); save(arr); render();
+  });
+
+  document.getElementById('exportAll').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(load(), null, 2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'upi_battles.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+  });
+
+  document.getElementById('importFile').addEventListener('change', e => {
+    const file = e.target.files?.[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try{ const data = JSON.parse(ev.target.result); if(!Array.isArray(data)) throw new Error(); save(data); render(); }
+      catch{ alert('Import failed'); }
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById('clearAll').addEventListener('click', () => {
+    if(confirm('Clear all battles?')){ save([]); render(); }
+  });
+
+  render();
+})();
+</script>
+
+  <div class="footer">Data stored locally in your browser (localStorage, key UPI_BATTLES_V1).</div>
+</body>
+</html>
