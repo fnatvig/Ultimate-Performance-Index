@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ultimate Performance Index (UPI) — Live Calculator</title>
+  <style>
+    :root { --gap: 10px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: var(--gap); }
+    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+    fieldset { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
+    legend { font-weight: 600; padding: 0 6px; }
+    label { font-size: 14px; }
+    input[type="text"], input[type="number"], select { border: 1px solid #ccc; border-radius: 8px; padding: 6px 8px; font-size: 14px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { border: 1px solid #e5e5e5; padding: 6px 8px; text-align: center; }
+    th { background: #fafafa; position: sticky; top: 0; }
+    .row-actions button, .controls button { padding: 6px 10px; border-radius: 8px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .controls { display: flex; flex-wrap: wrap; gap: var(--gap); }
+    .pill { display: inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; }
+    .note { font-size: 12px; color: #666; }
+    .right { text-align: right; }
+    .nowrap { white-space: nowrap; }
+    .ok { background: #e8f7ee; }
+    .warn { background: #fff5e6; }
+    .error { background: #ffecec; }
+    .footer { margin-top: 16px; font-size: 12px; color: #666; }
+    .print-only { display: none; }
+    @media print { .no-print { display: none !important; } .print-only { display: block; } body { margin: 0; } }
+  </style>
+</head>
+<body>
+  <h1>Ultimate Performance Index (UPI) — Live Calculator</h1>
+  <p class="note">Enter raw results, choose whether an event is maximizing or minimizing, optionally set weights, then Calculate. Scores are normalized per event and summed into UPI.</p>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Participants</legend>
+      <div class="controls no-print">
+        <input id="newName" type="text" placeholder="Add participant name" />
+        <input id="newBW" type="number" step="0.1" min="0" placeholder="Bodyweight (kg, optional)" />
+        <button id="addParticipant">Add</button>
+        <button id="seedFive">Seed Filip, Isak, Calle, William, Max</button>
+      </div>
+      <table id="participantsTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Bodyweight kg</th>
+            <th class="no-print">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </fieldset>
+
+    <fieldset>
+      <legend>Events</legend>
+      <div class="controls no-print">
+        <input id="evName" type="text" placeholder="Event name e.g. Bench Press" />
+        <select id="evMode">
+          <option value="max">Maximizing</option>
+          <option value="min">Minimizing</option>
+        </select>
+        <input id="evWeight" type="number" step="0.01" value="1" title="Weight" />
+        <label><input id="evPerBW" type="checkbox" /> Per bodyweight</label>
+        <button id="addEvent">Add</button>
+      </div>
+      <table id="eventsTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Mode</th>
+            <th>Weight</th>
+            <th>Per BW</th>
+            <th class="no-print">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="note">Per bodyweight divides raw value by participant bodyweight during normalization. For minimizing events it divides the denominator P<sub>ij</sub> accordingly.</p>
+    </fieldset>
+  </div>
+
+  <fieldset>
+    <legend>Raw Results</legend>
+    <div class="controls no-print">
+      <button id="rebuildMatrix">Rebuild Matrix</button>
+      <button id="clearMatrix">Clear Values</button>
+    </div>
+    <div id="matrixContainer"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Scores</legend>
+    <div class="controls no-print">
+      <button id="calculate">Calculate</button>
+      <button id="sortByUPI">Sort by UPI</button>
+      <button id="printPage">Print</button>
+    </div>
+    <div id="scoresContainer"></div>
+    <div class="footer print-only">Generated with the UPI Live Calculator</div>
+  </fieldset>
+
+<script>
+(function(){
+  const participants = [];
+  const events = [];
+  // Raw matrix: { [eventIndex]: { [participantIndex]: number|null } }
+  let matrix = {};
+
+  const el = id => document.getElementById(id);
+  const tParticipants = el('participantsTable').querySelector('tbody');
+  const tEvents = el('eventsTable').querySelector('tbody');
+  const matrixContainer = el('matrixContainer');
+  const scoresContainer = el('scoresContainer');
+
+  function renderParticipants(){
+    tParticipants.innerHTML = '';
+    participants.forEach((p, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" value="${p.name}" data-i="${i}" class="p-name" /></td>
+        <td><input type="number" step="0.1" min="0" value="${p.bw ?? ''}" data-i="${i}" class="p-bw" /></td>
+        <td class="no-print row-actions"><button data-i="${i}" class="del-p">Remove</button></td>
+      `;
+      tParticipants.appendChild(tr);
+    });
+  }
+
+  function renderEvents(){
+    tEvents.innerHTML = '';
+    events.forEach((e, j) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" value="${e.name}" data-j="${j}" class="e-name" /></td>
+        <td>
+          <select data-j="${j}" class="e-mode">
+            <option value="max" ${e.mode==='max'?'selected':''}>Maximizing</option>
+            <option value="min" ${e.mode==='min'?'selected':''}>Minimizing</option>
+          </select>
+        </td>
+        <td><input type="number" step="0.01" value="${e.weight}" data-j="${j}" class="e-weight" /></td>
+        <td><input type="checkbox" ${e.perBW? 'checked':''} data-j="${j}" class="e-perbw" /></td>
+        <td class="no-print row-actions"><button data-j="${j}" class="del-e">Remove</button></td>
+      `;
+      tEvents.appendChild(tr);
+    });
+  }
+
+  function rebuildMatrix(){
+    matrix = {};
+    events.forEach((_, j) => { matrix[j] = {}; participants.forEach((_, i) => { matrix[j][i] = null; }); });
+    renderMatrix();
+  }
+
+  function renderMatrix(){
+    const hasAny = participants.length > 0 && events.length > 0;
+    if(!hasAny){ matrixContainer.innerHTML = '<p class="note">Add participants and events to enter results.</p>'; return; }
+    let html = '<div style="overflow:auto"><table><thead><tr><th class="right">Event ↓  Participant →</th>';
+    participants.forEach(p => { html += `<th>${escapeHtml(p.name)}</th>`; });
+    html += '</tr></thead><tbody>';
+    events.forEach((e, j) => {
+      html += `<tr><th class="right nowrap">${escapeHtml(e.name)} <span class="pill">${e.mode==='max'?'max':'min'}${e.perBW? ', per BW':''}</span></th>`;
+      participants.forEach((_, i) => {
+        const v = matrix[j]?.[i];
+        html += `<td><input type="number" step="0.0001" data-j="${j}" data-i="${i}" class="cell" value="${v ?? ''}"></td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    matrixContainer.innerHTML = html;
+  }
+
+  function calculate(){
+    if(events.length === 0 || participants.length === 0){ scoresContainer.innerHTML = '<p class="note">Nothing to calculate.</p>'; return; }
+
+    // Build normalized scores per event
+    const norm = participants.map(()=> events.map(()=> 0)); // [i][j]
+
+    events.forEach((e, j) => {
+      // Build adjusted values P_ij' with perBW if needed
+      const vals = participants.map((p, i) => {
+        let v = parseNumber(matrix[j]?.[i]);
+        if(v == null) return null;
+        if(e.perBW){
+          const bw = parseNumber(p.bw);
+          if(!bw || bw <= 0) return NaN; // missing bw
+          v = v / bw;
+        }
+        return v;
+      });
+
+      const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
+      if(finiteVals.length === 0) return; // cannot score this event
+
+      if(e.mode === 'max'){
+        const maxV = Math.max(...finiteVals);
+        participants.forEach((_, i) => {
+          const v = vals[i];
+          let s = 0;
+          if(typeof v === 'number' && isFinite(v)) s = (v / maxV) * 100;
+          norm[i][j] = s * e.weight;
+        });
+      } else {
+        const positiveVals = finiteVals.filter(x => x > 0);
+        const minV = Math.min(...positiveVals);
+        participants.forEach((_, i) => {
+          const v = vals[i];
+          let s = 0;
+          if(typeof v === 'number' && isFinite(v) && v > 0) s = (minV / v) * 100;
+          norm[i][j] = s * e.weight;
+        });
+      }
+    });
+
+    const totals = participants.map((_, i) => norm[i].reduce((a,b)=>a+b,0));
+
+    // Render scores table
+    let html = '<div style="overflow:auto"><table><thead><tr><th>Participant</th>';
+    events.forEach((e, j)=>{ html += `<th>${escapeHtml(e.name)}${e.weight!==1? ` ×${e.weight}`:''}</th>`; });
+    html += '<th>UPI</th></tr></thead><tbody>';
+    participants.forEach((p, i) => {
+      html += `<tr><th>${escapeHtml(p.name)}</th>`;
+      events.forEach((_, j)=>{
+        const s = norm[i][j];
+        const cls = isNaN(s) ? 'error' : (s>0? 'ok':'warn');
+        html += `<td class="${cls}">${isNaN(s)? 'BW missing' : s.toFixed(2)}</td>`;
+      });
+      html += `<td><strong>${totals[i].toFixed(2)}</strong></td></tr>`;
+    });
+    html += '</tbody></table></div>';
+
+    // Ranking
+    const order = participants.map((_, i)=> i).sort((a,b)=> totals[b]-totals[a]);
+    html += '<p class="note">Ranking: ' + order.map((idx, k)=> `${k+1}. ${escapeHtml(participants[idx].name)} (${totals[idx].toFixed(2)})`).join('  ') + '</p>';
+
+    scoresContainer.innerHTML = html;
+  }
+
+  function sortByUPI(){
+    // Trigger a calc, then re-order participants by current totals
+    if(events.length === 0 || participants.length === 0) return;
+    const tempMatrix = JSON.parse(JSON.stringify(matrix));
+    const tempParticipants = JSON.parse(JSON.stringify(participants));
+    const tempEvents = JSON.parse(JSON.stringify(events));
+
+    // quick compute totals
+    const totals = participants.map(()=>0);
+    const norm = participants.map(()=> events.map(()=> 0));
+    events.forEach((e, j) => {
+      const vals = participants.map((p, i) => {
+        let v = parseNumber(matrix[j]?.[i]);
+        if(v == null) return null;
+        if(e.perBW){
+          const bw = parseNumber(p.bw);
+          if(!bw || bw <= 0) return NaN;
+          v = v / bw;
+        }
+        return v;
+      });
+      const finiteVals = vals.filter(x => typeof x === 'number' && isFinite(x));
+      if(finiteVals.length === 0) return;
+      if(e.mode === 'max'){
+        const maxV = Math.max(...finiteVals);
+        participants.forEach((_, i) => { const v = vals[i]; if(typeof v==='number' && isFinite(v)) norm[i][j] = (v/maxV)*100*e.weight; });
+      } else {
+        const positiveVals = finiteVals.filter(x => x > 0);
+        const minV = Math.min(...positiveVals);
+        participants.forEach((_, i) => { const v = vals[i]; if(typeof v==='number' && isFinite(v) && v>0) norm[i][j] = (minV/v)*100*e.weight; });
+      }
+    });
+    participants.forEach((_, i)=> totals[i] = norm[i].reduce((a,b)=>a+b,0));
+
+    const order = participants.map((_, i)=> i).sort((a,b)=> totals[b]-totals[a]);
+
+    // reorder participants and matrix
+    const pNew = order.map(i => participants[i]);
+    const mNew = {};
+    events.forEach((_, j)=>{ mNew[j] = {}; order.forEach((oldI, newI)=> { mNew[j][newI] = matrix[j][oldI]; }); });
+
+    participants.splice(0, participants.length, ...pNew);
+    matrix = mNew;
+    renderParticipants();
+    renderMatrix();
+    calculate();
+  }
+
+  function clearMatrix(){
+    Object.keys(matrix).forEach(j => { Object.keys(matrix[j]).forEach(i => { matrix[j][i] = null; }); });
+    renderMatrix();
+    scoresContainer.innerHTML = '';
+  }
+
+  // Helpers
+  function parseNumber(v){ if(v === '' || v === null || typeof v === 'undefined') return null; const n = Number(v); return isFinite(n) ? n : null; }
+  function escapeHtml(s){ return String(s).replace(/[&<>"](?!amp;)/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // Event listeners
+  el('addParticipant').addEventListener('click', () => {
+    const name = el('newName').value.trim();
+    if(!name) return;
+    const bw = parseNumber(el('newBW').value);
+    participants.push({ name, bw });
+    el('newName').value = ''; el('newBW').value = '';
+    renderParticipants(); rebuildMatrix();
+  });
+
+  el('seedFive').addEventListener('click', () => {
+    ['Filip','Isak','Calle','William','Max'].forEach(n => participants.push({name:n, bw:null}));
+    renderParticipants(); rebuildMatrix();
+  });
+
+  tParticipants.addEventListener('input', e => {
+    if(e.target.classList.contains('p-name')){
+      const i = Number(e.target.dataset.i); participants[i].name = e.target.value;
+    }
+    if(e.target.classList.contains('p-bw')){
+      const i = Number(e.target.dataset.i); participants[i].bw = parseNumber(e.target.value);
+    }
+  });
+
+  tParticipants.addEventListener('click', e => {
+    if(e.target.classList.contains('del-p')){
+      const i = Number(e.target.dataset.i);
+      participants.splice(i,1);
+      // remove column i from matrix
+      Object.keys(matrix).forEach(j => { const row = {}; let k=0; Object.keys(matrix[j]).forEach(ci=>{ if(Number(ci)!==i){ row[k++] = matrix[j][ci]; } }); matrix[j] = row; });
+      renderParticipants(); renderMatrix();
+    }
+  });
+
+  el('addEvent').addEventListener('click', () => {
+    const name = el('evName').value.trim(); if(!name) return;
+    const mode = el('evMode').value;
+    const weight = parseNumber(el('evWeight').value) ?? 1;
+    const perBW = el('evPerBW').checked;
+    events.push({ name, mode, weight, perBW });
+    el('evName').value=''; el('evWeight').value='1'; el('evPerBW').checked=false; el('evMode').value='max';
+    renderEvents(); rebuildMatrix();
+  });
+
+  tEvents.addEventListener('input', e => {
+    const j = Number(e.target.dataset.j);
+    if(e.target.classList.contains('e-name')) events[j].name = e.target.value;
+    if(e.target.classList.contains('e-weight')) events[j].weight = parseNumber(e.target.value) ?? 1;
+    if(e.target.classList.contains('e-mode')) events[j].mode = e.target.value;
+  });
+
+  tEvents.addEventListener('change', e => {
+    if(e.target.classList.contains('e-perbw')){
+      const j = Number(e.target.dataset.j); events[j].perBW = e.target.checked;
+    }
+  });
+
+  tEvents.addEventListener('click', e => {
+    if(e.target.classList.contains('del-e')){
+      const j = Number(e.target.dataset.j);
+      events.splice(j,1);
+      // rebuild matrix dropping event j
+      const m2 = {}; let nj = 0; Object.keys(matrix).forEach(k => { if(Number(k)!==j){ m2[nj++] = matrix[k]; } });
+      matrix = m2;
+      renderEvents(); renderMatrix();
+    }
+  });
+
+  matrixContainer.addEventListener('input', e => {
+    if(e.target.classList.contains('cell')){
+      const j = Number(e.target.dataset.j); const i = Number(e.target.dataset.i);
+      matrix[j][i] = e.target.value;
+    }
+  });
+
+  el('rebuildMatrix').addEventListener('click', rebuildMatrix);
+  el('clearMatrix').addEventListener('click', clearMatrix);
+  el('calculate').addEventListener('click', calculate);
+  el('sortByUPI').addEventListener('click', sortByUPI);
+  el('printPage').addEventListener('click', () => window.print());
+
+  // Seed one example event for convenience
+  events.push({ name: 'Bench Press (kg)', mode: 'max', weight: 1, perBW: false });
+  events.push({ name: 'Skierg 500m (s)', mode: 'min', weight: 1, perBW: false });
+  renderEvents();
+})();
+</script>
+</body>
+</html>
