@@ -97,7 +97,7 @@
       const e = b.events || [];
       const totals = b.totals || [];
       let html = '<table><thead><tr><th>Participant</th>';
-      e.forEach(ev => { html += `<th>${escapeHtml(ev.name)}${ev.weight && ev.weight!==1 ? ' ×'+ev.weight : ''}${ev.perBW? ' per BW':''}</th>`; });
+      e.forEach(ev => {const base = ev.name.replace(/\(.*?\)/, '').trim();html += `<th>${escapeHtml(base)} (UPI)${ev.weight && ev.weight!==1 ? ' ×'+ev.weight : ''}${ev.perBW? ' per BW':''}</th>`;});
       html += '<th>UPI</th></tr></thead><tbody>';
       p.forEach((pi,i) => {
         const scores = b.scores?.[i] || [];

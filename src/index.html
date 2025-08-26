@@ -231,7 +231,7 @@
 
     // Render scores table
     let html = '<div style="overflow:auto"><table><thead><tr><th>Participant</th>';
-    events.forEach((e, j)=>{ html += `<th>${escapeHtml(e.name)}${e.weight!==1? ` ×${e.weight}`:''}</th>`; });
+    events.forEach((e, j)=>{ html += `<th>${escapeHtml(e.name.replace(/\(.*?\)/, '').trim())} (UPI)${e.weight!==1? ` ×${e.weight}`:''}</th>`; });
     html += '<th>UPI</th></tr></thead><tbody>';
     participants.forEach((p, i) => {
       html += `<tr><th>${escapeHtml(p.name)}</th>`;
